@@ -53,15 +53,15 @@ CONFIG_SITE="$(pwd)/depends/aarch64-linux-gnu/share/config.site" ./configure --p
 # cd $WD
 
 WD=$PWD
-# Build RandomX for aarch64
+# Build RandomX for aarch64 without JIT
 cd src/crypto/randomx
-
 rm -rf build
 mkdir build && cd build
 cmake -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
       -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
       -DCMAKE_AR=aarch64-linux-gnu-ar \
-      -DARCH=generic ..
+      -DARCH=generic \
+      -DRANDOMX_USE_JIT=OFF ..
 time make "$@"
 cd $WD
 
