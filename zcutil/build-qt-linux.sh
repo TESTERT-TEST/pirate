@@ -93,6 +93,21 @@ DEBUGGING_ARG='--enable-debug'
 ./configure --prefix="${PREFIX}" --with-gui=qt5 --disable-bip70 --enable-tests=yes --enable-wallet=yes "$DEBUGGING_ARG" "$HARDENING_ARG" "$LCOV_ARG" "$TEST_ARG" "$MINING_ARG" $CONFIGURE_FLAGS CXXFLAGS='-g0'
 # -Wunused -Wunreachable-code'
 
+WD=$PWD
+# Build RandomX
+cd src/crypto/randomx
+if [ -d "build" ]
+then
+    ls -la build/librandomx*
+else
+    mkdir build && cd build
+    cmake -DARCH=native ..
+    # pass along potential -jX and other args
+    time make "$@"
+fi
+
+cd $WD
+
 nice -n 20 "$MAKE" "$@"
 #V=1
 

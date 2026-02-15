@@ -106,4 +106,19 @@ cd ../..
 # Build the full node
 ./autogen.sh
 CONFIG_SITE="$PREFIX/share/config.site" ./configure "$HARDENING_ARG" "$LCOV_ARG" "$TEST_ARG" "$MINING_ARG" "$RUST_ARG" $CONFIGURE_FLAGS CXXFLAGS='-g'
+
+WD=$PWD
+# Build RandomX
+cd src/crypto/randomx
+if [ -d "build" ]
+then
+    ls -la build/librandomx*
+else
+    mkdir build && cd build
+    CC="${CC} -g " CXX="${CXX} -g " cmake ..
+    make
+fi
+
+cd $WD
+
 "$MAKE" "$@" V=1

@@ -52,4 +52,19 @@ CONFIG_SITE="$(pwd)/depends/aarch64-linux-gnu/share/config.site" ./configure --p
 # ./makecustom
 # cd $WD
 
+WD=$PWD
+# Build RandomX
+cd src/crypto/randomx
+if [ -d "build" ]
+then
+    ls -la build/librandomx*
+else
+    mkdir build && cd build
+    cmake -DARCH=native ..
+    # pass along potential -jX and other args
+    time make "$@"
+fi
+
+cd $WD
+
 make "$@" V=1

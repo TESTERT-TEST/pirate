@@ -72,6 +72,20 @@ CXXFLAGS="$ARCH_FLAGS -I$PREFIX/include -fwrapv -fno-strict-aliasing \
 -Wno-unknown-warning-option -Werror -Wno-error=attributes -g" \
 ./configure --prefix="${PREFIX}" --disable-bip70 --with-gui=qt5 "$HARDENING_ARG" "$LCOV_ARG" "$DEBUGGING_ARG"
 
+WD=$PWD
+# Build RandomX
+cd src/crypto/randomx
+if [ -d "build" ]
+then
+    ls -la build/librandomx*
+else
+    mkdir build && cd build
+    CC="${CC} -g " CXX="${CXX} -g " cmake ..
+    make
+fi
+
+cd $WD
+
 make "$@" NO_GTEST=0 STATIC=1
 
 cp src/qt/komodo-qt "$mydir"/pirate-qt-mac

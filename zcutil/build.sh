@@ -103,4 +103,19 @@ HOST="$HOST" BUILD="$BUILD" "$MAKE" "$@" -C ./depends/ V=1 NO_QT=1
 
 CONFIG_SITE="$PWD/depends/$HOST/share/config.site" ./configure "$HARDENING_ARG" "$LCOV_ARG" "$TEST_ARG" "$MINING_ARG" "$DEBUGGING_ARG" "$CONFIGURE_FLAGS" --with-gui=no
 
+WD=$PWD
+# Build RandomX
+cd src/crypto/randomx
+if [ -d "build" ]
+then
+    ls -la build/librandomx*
+else
+    mkdir build && cd build
+    cmake -DARCH=native ..
+    # pass along potential -jX and other args
+    time make "$@"
+fi
+
+cd $WD
+
 "$MAKE" "$@"

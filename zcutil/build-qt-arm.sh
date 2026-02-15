@@ -44,6 +44,21 @@ HOST=aarch64-linux-gnu BUILD=x86_64-unknown-linux-gnu make "$@" -C ./depends/ V=
 ./autogen.sh
 CONFIG_SITE="$(pwd)/depends/aarch64-linux-gnu/share/config.site" ./configure --prefix="${PREFIX}" --host=aarch64-linux-gnu --build=x86_64-unknown-linux-gnu --with-gui=qt5 --disable-bip70 --enable-tests=yes --enable-online-rust=yes "$HARDENING_ARG" "$LCOV_ARG" CXXFLAGS='-fwrapv -fno-strict-aliasing -g'
 
+WD=$PWD
+# Build RandomX
+cd src/crypto/randomx
+if [ -d "build" ]
+then
+    ls -la build/librandomx*
+else
+    mkdir build && cd build
+    cmake -DARCH=native ..
+    # pass along potential -jX and other args
+    time make "$@"
+fi
+
+cd $WD
+
 make "$@" V=1
 
 cp src/qt/komodo-qt ./pirate-qt-arm

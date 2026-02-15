@@ -20,5 +20,29 @@ CONFIG_SITE=$PWD/depends/x86_64-w64-mingw64/share/config.site \
     --with-gui=no --disable-bip70 --enable-tests=yes
 
 sed -i 's/-lboost_system-mt /-lboost_system-mt-s /' configure
+
+WD=$PWD
+
+# Build RandomX
+cd src/crypto/randomx
+if [ -f "build/librandomx.a" ]; then
+    echo "RandomX already built"
+else
+    rm -rf build
+    mkdir -p build && cd build
+    CC="${CC}" CXX="${CXX}" cmake \
+        -DCMAKE_SYSTEM_NAME=Windows \
+        -DCMAKE_C_COMPILER="${CC}" \
+        -DCMAKE_CXX_COMPILER="${CXX}" \
+        -DCMAKE_C_FLAGS="-static-libgcc" \
+        -DCMAKE_CXX_FLAGS="-static-libstdc++" \
+        -DARCH=native \
+        ..
+    make
+    cd ..
+fi
+
+cd $WD
+
 cd src/
 CC="${CC}" CXX="${CXX}" make "$@" V=1
