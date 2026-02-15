@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-export CC=gcc-8
-export CXX=g++-8
 set -eu -o pipefail
 
 # Allow user overrides to $MAKE. Typical usage for users who need it:
@@ -116,7 +114,7 @@ then
     ls -la build/librandomx*
 else
     mkdir build && cd build
-    CC="${CC} -g " CXX="${CXX} -g " cmake ..
+    cmake -DARCH=native ..
     make
 fi
 
