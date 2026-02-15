@@ -1,5 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2014 The Bitcoin Core developers
+// Copyright (c) 2026      Aequus core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -97,6 +98,12 @@ uint256 (CBlockHeader::*CBlockHeader::hashFunction)() const = &CBlockHeader::Get
 
 uint256 CBlockHeader::GetSHA256DHash() const
 {
+    if (nSolution.size() == 32) {
+        uint256 hash;
+        memcpy(hash.begin(), nSolution.data(), 32);
+        return hash;
+    }
+
     return SerializeHash(*this);
 }
 

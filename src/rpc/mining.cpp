@@ -1,5 +1,6 @@
 // Copyright (c) 2010 Satoshi Nakamoto
 // Copyright (c) 2009-2014 The Bitcoin Core developers
+// Copyright (c) 2026      Aequus core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -26,6 +27,10 @@
 #include "komodo_bitcoind.h"
 #ifdef ENABLE_MINING
 #include "crypto/equihash.h"
+#include "crypto/randomx/src/randomx.h"
+#include "hash.h"
+#include "util.h"
+#include "komodo_defs.h"
 #endif
 #include "init.h"
 #include "main.h"
@@ -833,6 +838,8 @@ UniValue getblocktemplate(const UniValue& params, bool fHelp, const CPubKey& myp
     }
     CBlock* pblock = &pblocktemplate->block; // pointer for convenience
 
+    // ========== Merkle root ==========
+    pblock->hashMerkleRoot = pblock->BuildMerkleTree();
     // Update nTime
     UpdateTime(pblock, Params().GetConsensus(), pindexPrev);
     pblock->nNonce = uint256();
@@ -891,6 +898,33 @@ UniValue getblocktemplate(const UniValue& params, bool fHelp, const CPubKey& myp
 
     UniValue aux(UniValue::VOBJ);
     aux.push_back(Pair("flags", HexStr(COINBASE_FLAGS.begin(), COINBASE_FLAGS.end())));
+
+    // ========== RANDOMX SEED ДЛЯ  ПУЛА ==========
+    int randomxInterval = GetArg("-ac_randomx_interval", 1024);
+    int randomxBlockLag = GetArg("-ac_randomx_lag", 64);
+        uint256 randomxSeed;
+    int keyHeight = 0;
+
+    int nHeight = pindexPrev->nHeight + 1;
+
+    if (nHeight < randomxInterval + randomxBlockLag) {
+
+        randomxSeed.SetNull();
+        *randomxSeed.begin() = 0x08;
+            keyHeight = 0;
+    } else {
+        
+        keyHeight = ((nHeight - randomxBlockLag) / randomxInterval) * randomxInterval;
+        CBlockIndex* pkeyIndex = chainActive[keyHeight];
+        if (pkeyIndex) {
+            randomxSeed = pkeyIndex->GetBlockHash();
+        } else {
+            
+            randomxSeed = uint256();
+            LogPrintf("WARNING: Could not find block at height %d for RandomX seed\n", keyHeight);
+        }
+    }
+    // ========== RANDOMX SEED ==========
 
     arith_uint256 hashTarget = arith_uint256().SetCompact(pblock->nBits);
 
@@ -962,6 +996,25 @@ UniValue getblocktemplate(const UniValue& params, bool fHelp, const CPubKey& myp
     result.push_back(Pair("bits", strprintf("%08x", pblock->nBits)));
     result.push_back(Pair("height", (int64_t)(pindexPrev->nHeight+1)));
 
+    // ========== RANDOMX ==========
+
+    result.push_back(Pair("randomxseedhash", HexStr(randomxSeed.begin(), randomxSeed.end())));
+    result.push_back(Pair("randomxseedheight", (int64_t)keyHeight));
+
+    uint256 randomxNextSeed;
+    int nextKeyHeight = 0;
+
+    if (nHeight + randomxBlockLag >= keyHeight + randomxInterval) {
+        nextKeyHeight = keyHeight + randomxInterval;
+        CBlockIndex* pnextKeyIndex = chainActive[nextKeyHeight];
+        if (pnextKeyIndex) {
+            randomxNextSeed = pnextKeyIndex->GetBlockHash();
+
+            result.push_back(Pair("randomxnextseedhash", HexStr(randomxNextSeed.begin(), randomxNextSeed.end())));
+        }
+    }
+    // ========== RANDOMX ==========
+	
     //fprintf(stderr,"return complete template\n");
     return result;
 }

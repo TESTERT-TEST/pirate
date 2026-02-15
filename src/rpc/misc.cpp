@@ -1,5 +1,6 @@
 // Copyright (c) 2010 Satoshi Nakamoto
 // Copyright (c) 2009-2014 The Bitcoin Core developers
+// Copyright (c) 2026      Aequus core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -389,8 +390,14 @@ UniValue getinfo(const UniValue& params, bool fHelp, const CPubKey& mypk)
             obj.push_back(Pair("commission",        ASSETCHAINS_COMMISSION));
         if ( ASSETCHAINS_STAKED != 0 )
             obj.push_back(Pair("staked",        ASSETCHAINS_STAKED));
-        if ( ASSETCHAINS_ALGO != ASSETCHAINS_EQUIHASH )
-            obj.push_back(Pair("algo",ASSETCHAINS_ALGORITHMS[ASSETCHAINS_ALGO]));
+        if ( ASSETCHAINS_ALGO == ASSETCHAINS_EQUIHASH ) {
+            uint64_t N = ASSETCHAINS_NK[0] ? ASSETCHAINS_NK[0] : 200;
+            uint64_t K = ASSETCHAINS_NK[1] ? ASSETCHAINS_NK[1] : 9;
+            std::string equihash_algo = "equihash (" + std::to_string(N) + "," + std::to_string(K) + ")";
+            obj.push_back(Pair("algo",equihash_algo));
+	    } else {
+            obj.push_back(Pair("algo", ASSETCHAINS_ALGORITHMS[ASSETCHAINS_ALGO]));
+        }
     }
     return obj;
 }

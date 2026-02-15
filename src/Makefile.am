@@ -45,6 +45,7 @@ LIBZCASH=libzcash.a
 LIBTLS=libtls.a
 LIBCJSON=libcjson.a
 LIBCXXBRIDGE=libcxxbridge.a
+LIBRANDOMX=crypto/randomx/build/librandomx.a
 
 if ENABLE_ZMQ
 LIBBITCOIN_ZMQ=libbitcoin_zmq.a
@@ -466,6 +467,8 @@ libbitcoin_server_a_SOURCES = \
   notaries_staked.cpp \
   noui.cpp \
   notarisationdb.cpp \
+  numa_helper.cpp \
+  numa_helper.h \
 	params.cpp \
   paymentdisclosure.cpp \
   paymentdisclosuredb.cpp \
@@ -552,6 +555,8 @@ crypto_libbitcoin_crypto_a_CPPFLAGS = $(AM_CPPFLAGS) $(BITCOIN_CONFIG_INCLUDES)
 crypto_libbitcoin_crypto_a_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS)
 crypto_libbitcoin_crypto_a_SOURCES = \
   crypto/common.h \
+  crypto/cpu_features.cpp \
+  crypto/cpu_features.h \
   crypto/equihash.cpp \
   crypto/equihash.h \
   crypto/equihash.tcc \
@@ -559,6 +564,15 @@ crypto_libbitcoin_crypto_a_SOURCES = \
   crypto/hmac_sha256.h \
   crypto/hmac_sha512.cpp \
   crypto/hmac_sha512.h \
+  crypto/msr.cpp \
+  crypto/msr.h \
+  crypto/msr_item.h \
+  crypto/randomx_fix.cpp \
+  crypto/randomx_fix.h \
+  crypto/randomx_msr.cpp \
+  crypto/randomx_msr.h \
+  crypto/randomx_wrapper.cpp \
+  crypto/randomx_wrapper.h \
   crypto/ripemd160.cpp \
   crypto/ripemd160.h \
   crypto/sha1.cpp \
@@ -729,6 +743,7 @@ pirated_LDADD += \
   $(LIBLEVELDB) \
   $(LIBMEMENV) \
   $(LIBBITCOIN_CRYPTO) \
+  $(LIBRANDOMX) \
   $(LIBZCASH_LIBS) \
   $(BOOST_LIBS) \
   $(BDB_LIBS) \
@@ -796,6 +811,7 @@ wallet_utility_LDADD = \
   $(LIBCRYPTOCONDITIONS) \
   $(LIBSECP256K1) \
   $(LIBBITCOIN_CRYPTO) \
+  $(LIBRANDOMX) \
   $(LIBZCASH_LIBS) \
   $(BOOST_LIBS) \
   $(BDB_LIBS) \
@@ -828,6 +844,7 @@ pirate_tx_LDADD = \
   $(LIBSECP256K1) \
   $(LIBUNIVALUE) \
   $(LIBBITCOIN_CRYPTO) \
+  $(LIBRANDOMX) \
   $(LIBZCASH_LIBS) \
   $(BOOST_LIBS) \
   $(CRYPTO_LIBS) \
