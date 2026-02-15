@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-
+export CC=gcc-8
+export CXX=g++-8
 set -eu -o pipefail
 
 # Allow user overrides to $MAKE. Typical usage for users who need it:
