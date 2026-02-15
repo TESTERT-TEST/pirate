@@ -45,18 +45,16 @@ HOST=aarch64-linux-gnu BUILD=x86_64-unknown-linux-gnu make "$@" -C ./depends/ V=
 CONFIG_SITE="$(pwd)/depends/aarch64-linux-gnu/share/config.site" ./configure --prefix="${PREFIX}" --host=aarch64-linux-gnu --build=x86_64-unknown-linux-gnu --with-gui=qt5 --disable-bip70 --enable-tests=yes --enable-online-rust=yes "$HARDENING_ARG" "$LCOV_ARG" CXXFLAGS='-fwrapv -fno-strict-aliasing -g'
 
 WD=$PWD
-# Build RandomX
+# Build RandomX for aarch64
 cd src/crypto/randomx
-if [ -d "build" ]
-then
-    ls -la build/librandomx*
-else
-    mkdir build && cd build
-    cmake -DARCH=native ..
-    # pass along potential -jX and other args
-    time make "$@"
-fi
 
+rm -rf build
+mkdir build && cd build
+cmake -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+      -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
+      -DCMAKE_AR=aarch64-linux-gnu-ar \
+      -DARCH=generic ..
+time make "$@"
 cd $WD
 
 make "$@" V=1
