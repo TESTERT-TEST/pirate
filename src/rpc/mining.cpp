@@ -27,7 +27,7 @@
 #include "komodo_bitcoind.h"
 #ifdef ENABLE_MINING
 #include "crypto/equihash.h"
-#include "crypto/randomx/src/randomx.h"
+#include "crypto/randomx_wrapper.h"
 #include "hash.h"
 #include "util.h"
 #include "komodo_defs.h"
@@ -655,7 +655,10 @@ UniValue getblocktemplate(const UniValue& params, bool fHelp, const CPubKey& myp
             "  \"sizelimit\" : n,                  (numeric) limit of block size\n"
             "  \"curtime\" : ttt,                  (numeric) current timestamp in seconds since epoch (Jan 1 1970 GMT)\n"
             "  \"bits\" : \"xxx\",                 (string) compressed target of next block\n"
-            "  \"height\" : n                      (numeric) The height of the next block\n"
+            "  \"height\" : n,                      (numeric) The height of the next block\n"
+            "  \"randomxseedheight\" : n,           (numeric) The block height whose hash is used as RandomX seed\n"
+            "  \"randomxseedhash\" : \"xxxx\",        (string) The RandomX seed hash to use (block hash or 0x08... for genesis)\n"
+            "  \"randomxnextseedhash\" : \"xxxx\"     (string, optional) The next epoch's seed hash (for pre-caching)\n"
             "}\n"
 
             "\nExamples:\n"
@@ -899,27 +902,24 @@ UniValue getblocktemplate(const UniValue& params, bool fHelp, const CPubKey& myp
     UniValue aux(UniValue::VOBJ);
     aux.push_back(Pair("flags", HexStr(COINBASE_FLAGS.begin(), COINBASE_FLAGS.end())));
 
-    // ========== RANDOMX SEED ДЛЯ  ПУЛА ==========
-    int randomxInterval = GetArg("-ac_randomx_interval", 1024);
-    int randomxBlockLag = GetArg("-ac_randomx_lag", 64);
-        uint256 randomxSeed;
+    // ========== RANDOMX SEED ==========
+    int randomxInterval = RANDOMX_DEFAULT_EPOCH_BLOCKS;   // 1024
+    int randomxBlockLag = RANDOMX_DEFAULT_EPOCH_LAG;      // 64
+    uint256 randomxSeed;
     int keyHeight = 0;
 
     int nHeight = pindexPrev->nHeight + 1;
 
     if (nHeight < randomxInterval + randomxBlockLag) {
-
         randomxSeed.SetNull();
         *randomxSeed.begin() = 0x08;
-            keyHeight = 0;
+        keyHeight = 0;
     } else {
-        
         keyHeight = ((nHeight - randomxBlockLag) / randomxInterval) * randomxInterval;
         CBlockIndex* pkeyIndex = chainActive[keyHeight];
-        if (pkeyIndex) {
-            randomxSeed = pkeyIndex->GetBlockHash();
+       if (pkeyIndex) {
+        randomxSeed = pkeyIndex->GetBlockHash();
         } else {
-            
             randomxSeed = uint256();
             LogPrintf("WARNING: Could not find block at height %d for RandomX seed\n", keyHeight);
         }
