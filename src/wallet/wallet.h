@@ -1143,12 +1143,12 @@ public:
 
     void ProcessSaplingBlockTransactions(const CBlockIndex* pblockindex, const CBlock* pblock);
     bool ValidateSaplingWalletTrackedPositions(const CBlockIndex* pindex);
-    void IncrementSaplingWallet(const CBlockIndex* pindex, const CBlock* pblock = nullptr);
+    void IncrementSaplingWallet(const CBlockIndex* pindex, const CBlock* pblock = nullptr, bool suppressProgress = false);
     void DecrementSaplingWallet(const CBlockIndex* pindex);
 
     void ProcessOrchardBlockTransactions(const CBlockIndex* pblockindex, const CBlock* pblock);
     bool ValidateOrchardWalletTrackedPositions(const CBlockIndex* pindex);
-    void IncrementOrchardWallet(const CBlockIndex* pindex, const CBlock* pblock = nullptr);
+    void IncrementOrchardWallet(const CBlockIndex* pindex, const CBlock* pblock = nullptr, bool suppressProgress = false);
     void DecrementOrchardWallet(const CBlockIndex* pindex);
 
 
@@ -1261,12 +1261,13 @@ protected:
                     paymentAddressCount++;
                 }
 
-                for (std::pair<const libzcash::OrchardPaymentAddressPirate, libzcash::OrchardIncomingViewingKeyPirate>& ivkItem : mapUnsavedOrchardIncomingViewingKeys) {
-                    auto addr = ivkItem.first;
-                    auto ivk = ivkItem.second;
+                for (auto& ivkItem : mapUnsavedOrchardIncomingViewingKeys) {
+                    const auto& addr = ivkItem.first;
+                    const auto& ivk = ivkItem.second.first;
+                    const auto& scope = ivkItem.second.second;
 
                     // Write all archived orchard outpoint
-                    if (!walletdb.WriteOrchardPaymentAddress(ivk, addr)) {
+                    if (!walletdb.WriteOrchardPaymentAddress(ivk, addr, scope)) {
                         LogPrintf("SetBestChain(): Failed to write unsaved Orchard Payment address, aborting atomic write\n");
                         walletdb.TxnAbort();
                         return;
@@ -1421,13 +1422,15 @@ protected:
                         paymentAddressCount++;
                     }
 
-                    for (std::pair<const libzcash::OrchardPaymentAddressPirate, libzcash::OrchardIncomingViewingKeyPirate>& ivkItem : mapUnsavedOrchardIncomingViewingKeys) {
-                        auto addr = ivkItem.first;
-                        auto ivk = ivkItem.second;
+                    for (auto& ivkItem : mapUnsavedOrchardIncomingViewingKeys) {
+                        const auto& addr = ivkItem.first;
+                        const auto& ivk = ivkItem.second.first;
+                        const auto& scope = ivkItem.second.second;
 
                         std::vector<unsigned char> vchCryptedSecret;
                         uint256 chash = HashWithFP(addr);
-                        CKeyingMaterial vchSecret = SerializeForEncryptionInput(addr, ivk);
+                        uint8_t scopeValue = static_cast<uint8_t>(scope);
+                        CKeyingMaterial vchSecret = SerializeForEncryptionInput(addr, ivk, scopeValue);
 
                         if (!EncryptSerializedWalletObjects(vchSecret, chash, vchCryptedSecret)) {
                             LogPrintf("SetBestChain(): Failed to encrypt unsaved Orchard Payment address, aborting atomic write\n");
@@ -1967,7 +1970,9 @@ public:
         const libzcash::OrchardExtendedFullViewingKeyPirate &extfvk);
     bool AddOrchardIncomingViewingKey(
         const libzcash::OrchardIncomingViewingKeyPirate &ivk,
-        const libzcash::OrchardPaymentAddressPirate &addr);
+        const libzcash::OrchardPaymentAddressPirate &addr,
+        OrchardKeyScope scope);
+    bool RederiveOrchardAddressScopes();
     bool AddOrchardDiversifiedAddress(
         const libzcash::OrchardPaymentAddressPirate &addr,
         const libzcash::OrchardIncomingViewingKeyPirate &ivk,
@@ -1991,7 +1996,8 @@ public:
     //! without saving it to disk (used by LoadWallet)
     bool LoadOrchardPaymentAddress(
         const libzcash::OrchardPaymentAddressPirate &addr,
-        const libzcash::OrchardIncomingViewingKeyPirate &ivk);
+        const libzcash::OrchardIncomingViewingKeyPirate &ivk,
+        OrchardKeyScope scope);
     bool LoadCryptedOrchardPaymentAddress(
         const uint256 &chash,
         const std::vector<unsigned char> &vchCryptedSecret,
@@ -2069,7 +2075,7 @@ public:
          std::vector<std::optional<SproutWitness>>& witnesses,
          uint256 &final_anchor);
     void ReorderWalletTransactions(std::map<std::pair<int,int>, CWalletTx*> &mapSorted, int64_t &maxOrderPos);
-    void UpdateWalletTransactionOrder(std::map<std::pair<int,int>, CWalletTx*> &mapSorted, bool resetOrder);
+    void UpdateWalletTransactionOrder(std::map<std::pair<int,int>, CWalletTx*> &mapSorted);
     bool DeleteTransactions(std::vector<uint256> &removeTxs, std::vector<uint256> &removeArcTxs, bool fRescan = false);
     bool DeleteWalletTransactions(const CBlockIndex* pindex, bool fRescan = false);
     bool initalizeArcTx();

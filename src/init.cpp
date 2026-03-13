@@ -2381,6 +2381,18 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
             pwalletMain->SetMaxVersion(nMaxVersion);
         }
 
+        // Check if we need to rederive Orchard address scopes (for wallet upgrade compatibility)
+        if (GetBoolArg("-rederiverorchardscopes", false)) {
+            uiInterface.InitMessage(_("Rederiving Orchard address scopes..."));
+            LogPrintf("Manual Orchard scope rederivation requested via -rederiverorchardscopes\n");
+            LOCK(pwalletMain->cs_wallet);
+            if (!pwalletMain->RederiveOrchardAddressScopes()) {
+                InitWarning(_("Warning: Some Orchard address scopes could not be rederived"));
+            } else {
+                LogPrintf("Successfully rederived all Orchard address scopes\n");
+            }
+        }
+
         bool recoverWallet = false;
         if (!pwalletMain->HaveHDSeed())
         {
@@ -2655,7 +2667,7 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
                 int64_t maxOrderPos = 0;
                 std::map<std::pair<int,int>, CWalletTx*> mapSorted;
                 pwalletMain->ReorderWalletTransactions(mapSorted, maxOrderPos);
-                pwalletMain->UpdateWalletTransactionOrder(mapSorted, true);
+                pwalletMain->UpdateWalletTransactionOrder(mapSorted);
             }
         }
 

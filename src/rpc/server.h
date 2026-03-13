@@ -476,6 +476,10 @@ extern UniValue z_exportkey(const UniValue& params, bool fHelp, const CPubKey& m
 extern UniValue z_importkey(const UniValue& params, bool fHelp, const CPubKey& mypk); // in rpcdump.cpp
 extern UniValue z_exportviewingkey(const UniValue& params, bool fHelp, const CPubKey& mypk); // in rpcdump.cpp
 extern UniValue z_importviewingkey(const UniValue& params, bool fHelp, const CPubKey& mypk); // in rpcdump.cpp
+extern UniValue z_exportsaplingdisclosure(const UniValue& params, bool fHelp, const CPubKey& mypk); // in rpcwallet.cpp
+extern UniValue z_verifysaplingdisclosure(const UniValue& params, bool fHelp, const CPubKey& mypk); // in rpcwallet.cpp
+extern UniValue z_exportorcharddisclosure(const UniValue& params, bool fHelp, const CPubKey& mypk); // in rpcwallet.cpp
+extern UniValue z_verifyorcharddisclosure(const UniValue& params, bool fHelp, const CPubKey& mypk); // in rpcwallet.cpp
 extern UniValue z_setaddressbook(const UniValue& params, bool fHelp, const CPubKey& mypk); // in rpcdump.cpp
 extern UniValue z_getnewaddresskey(const UniValue& params, bool fHelp, const CPubKey& mypk); // in rpcwallet.cpp
 extern UniValue z_getnewaddress(const UniValue& params, bool fHelp, const CPubKey& mypk); // in rpcwallet.cpp
@@ -503,8 +507,6 @@ extern UniValue z_getoperationresult(const UniValue& params, bool fHelp, const C
 extern UniValue z_listoperationids(const UniValue& params, bool fHelp, const CPubKey& mypk); // in rpcwallet.cpp
 extern UniValue opreturn_burn(const UniValue& params, bool fHelp, const CPubKey& mypk); // in rpcwallet.cpp
 extern UniValue z_validateaddress(const UniValue& params, bool fHelp, const CPubKey& mypk); // in rpcmisc.cpp
-extern UniValue z_getpaymentdisclosure(const UniValue& params, bool fHelp, const CPubKey& mypk); // in rpcdisclosure.cpp
-extern UniValue z_validatepaymentdisclosure(const UniValue& params, bool fHelp, const CPubKey& mypk); // in rpcdisclosure.cpp
 
 extern UniValue MoMoMdata(const UniValue& params, bool fHelp, const CPubKey& mypk);
 extern UniValue calc_MoM(const UniValue& params, bool fHelp, const CPubKey& mypk);

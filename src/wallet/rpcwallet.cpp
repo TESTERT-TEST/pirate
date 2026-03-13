@@ -38,6 +38,7 @@
 #include "zcbenchmarks.h"
 #include "script/interpreter.h"
 #include "zcash/address/zip32.h"
+#include "zcash/address/sapling.hpp"
 #include "notaries_staked.h"
 #include "komodo.h"
 #include "komodo_bitcoind.h"
@@ -73,6 +74,7 @@
 #include "komodo_defs.h"
 #include "komodo_interest.h"
 #include "hex.h"
+#include <rust/bridge.h>
 #include <string.h>
 #include <regex>
 
@@ -9650,8 +9652,204 @@ extern UniValue z_importviewingkey(const UniValue& params, bool fHelp, const CPu
 extern UniValue z_exportwallet(const UniValue& params, bool fHelp, const CPubKey& mypk);
 extern UniValue z_importwallet(const UniValue& params, bool fHelp, const CPubKey& mypk);
 
-extern UniValue z_getpaymentdisclosure(const UniValue& params, bool fHelp, const CPubKey& mypk); // in rpcdisclosure.cpp
-extern UniValue z_validatepaymentdisclosure(const UniValue& params, bool fHelp, const CPubKey& mypk);
+/**
+ * z_exportsaplingdisclosure - Export a Sapling output disclosure for proof of payment
+ * 
+ * The disclosure key is derived from the Outgoing Viewing Key (OVK) and can be used to decrypt
+ * a specific transaction output without revealing the full OVK.
+ */
+UniValue z_exportsaplingdisclosure(const UniValue& params, bool fHelp, const CPubKey& mypk)
+{
+    if (!EnsureWalletIsAvailable(fHelp))
+        return NullUniValue;
+
+    if (fHelp || params.size() != 2)
+        throw runtime_error(
+            "z_exportsaplingdisclosure \"txid\" output_index\n"
+            "\nExports a Sapling output disclosure for proof of payment.\n"
+            "The disclosure can be used to decrypt the output without revealing the full Outgoing Viewing Key.\n"
+            "The result is encoded in bech32 format with 'zdisc' prefix (mainnet) or 'zdisctest' (testnet).\n"
+            "\nArguments:\n"
+            "1. \"txid\"          (string, required) The transaction id\n"
+            "2. output_index      (numeric, required) The output index (0-based)\n"
+            "\nResult:\n"
+            "\"encoded_disclosure\"  (string) The disclosure key encoded in bech32 format\n"
+            "\nExamples:\n"
+            + HelpExampleCli("z_exportsaplingdisclosure", "\"mytxid\" 0")
+            + HelpExampleRpc("z_exportsaplingdisclosure", "\"mytxid\", 0")
+        );
+
+    LOCK2(cs_main, pwalletMain->cs_wallet);
+
+    // Parse txid
+    uint256 txid = ParseHashV(params[0], "txid");
+    int outputIndex = params[1].get_int();
+
+    if (outputIndex < 0) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Output index must be non-negative");
+    }
+
+    // Use the shared function to generate the disclosure
+    std::string encodedDisclosure = GenerateSaplingDisclosure(pwalletMain, txid, outputIndex);
+    
+    if (encodedDisclosure.empty()) {
+        // Check why it failed
+        CTransaction tx;
+        uint256 hashBlock;
+        if (!GetTransaction(txid, tx, hashBlock, true)) {
+            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Transaction not found");
+        }
+
+        const auto& saplingBundle = tx.GetSaplingBundle();
+        if (!saplingBundle.IsPresent()) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "Transaction has no Sapling outputs");
+        }
+
+        const auto& bundleDetails = saplingBundle.GetDetails();
+        if (bundleDetails.num_outputs() == 0) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "Transaction has no Sapling outputs");
+        }
+
+        if (outputIndex >= (int)bundleDetails.num_outputs()) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Output index %d out of range", outputIndex));
+        }
+
+        // If we got here, the wallet doesn't have the right OVK
+        throw JSONRPCError(RPC_WALLET_ERROR, "No OVK in wallet can decrypt this output. You may not be the sender of this transaction.");
+    }
+
+    return encodedDisclosure;
+}
+
+/**
+ * z_exportorcharddisclosure - Export an Orchard action disclosure for proof of payment
+ * 
+ * The disclosure key is derived from the Outgoing Viewing Key (OVK) and can be used to decrypt
+ * a specific transaction action without revealing the full OVK.
+ */
+UniValue z_exportorcharddisclosure(const UniValue& params, bool fHelp, const CPubKey& mypk)
+{
+    if (!EnsureWalletIsAvailable(fHelp))
+        return NullUniValue;
+
+    if (fHelp || params.size() != 2)
+        throw runtime_error(
+            "z_exportorcharddisclosure \"txid\" action_index\n"
+            "\nExports an Orchard action disclosure for proof of payment.\n"
+            "The disclosure can be used to decrypt the action without revealing the full Outgoing Viewing Key.\n"
+            "The result is encoded in bech32 format with 'odisc' prefix (mainnet) or 'odisctest' (testnet).\n"
+            "\nArguments:\n"
+            "1. \"txid\"          (string, required) The transaction id\n"
+            "2. action_index      (numeric, required) The action index (0-based)\n"
+            "\nResult:\n"
+            "\"encoded_disclosure\"  (string) The disclosure key encoded in bech32 format\n"
+            "\nExamples:\n"
+            + HelpExampleCli("z_exportorcharddisclosure", "\"mytxid\" 0")
+            + HelpExampleRpc("z_exportorcharddisclosure", "\"mytxid\", 0")
+        );
+
+    LOCK2(cs_main, pwalletMain->cs_wallet);
+
+    // Parse txid
+    uint256 txid = ParseHashV(params[0], "txid");
+    int actionIndex = params[1].get_int();
+
+    if (actionIndex < 0) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Action index must be non-negative");
+    }
+
+    // Use the shared function to generate the disclosure
+    std::string encodedDisclosure = GenerateOrchardDisclosure(pwalletMain, txid, actionIndex);
+    
+    if (encodedDisclosure.empty()) {
+        // Check why it failed
+        CTransaction tx;
+        uint256 hashBlock;
+        if (!GetTransaction(txid, tx, hashBlock, true)) {
+            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Transaction not found");
+        }
+
+        const auto& orchardBundle = tx.GetOrchardBundle();
+        if (!orchardBundle.IsPresent()) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "Transaction has no Orchard actions");
+        }
+
+        const auto& bundleDetails = orchardBundle.GetDetails();
+        if (bundleDetails.num_actions() == 0) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "Transaction has no Orchard actions");
+        }
+
+        if (actionIndex >= (int)bundleDetails.num_actions()) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Action index %d out of range", actionIndex));
+        }
+
+        // If we got here, the wallet doesn't have the right OVK
+        throw JSONRPCError(RPC_WALLET_ERROR, "No OVK in wallet can decrypt this action. You may not be the sender of this transaction.");
+    }
+
+    return encodedDisclosure;
+}
+
+/**
+ * z_verifydisclosure - Unified RPC to verify/decrypt either Sapling or Orchard disclosure
+ * 
+ * Automatically detects the disclosure type and verifies accordingly.
+ */
+UniValue z_verifydisclosure(const UniValue& params, bool fHelp, const CPubKey& mypk)
+{
+    if (fHelp || params.size() != 1)
+        throw runtime_error(
+            "z_verifydisclosure \"disclosure\"\n"
+            "\nVerifies and decrypts a Sapling or Orchard transaction output/action using a disclosure key.\n"
+            "Automatically detects whether the disclosure is for Sapling or Orchard.\n"
+            "The disclosure should be in bech32 encoded format (as returned by z_exportsaplingdisclosure or z_exportorcharddisclosure).\n"
+            "\nArguments:\n"
+            "1. \"disclosure\"    (string, required) The disclosure key in bech32 format\n"
+            "\nResult:\n"
+            "{\n"
+            "  \"disclosure_type\": \"type\",   (string) Either \"Sapling\" or \"Orchard\"\n"
+            "  \"txid\": \"hex\",                (string) The transaction id\n"
+            "  \"output_index\": n,            (numeric) The output index (for Sapling)\n"
+            "  \"action_index\": n,            (numeric) The action index (for Orchard)\n"
+            "  \"value\": n,                   (numeric) The note value in zatoshis\n"
+            "  \"address\": \"address\",        (string) The payment address\n"
+            "  \"memo\": \"hex\"               (string) The memo in hex format\n"
+            "}\n"
+            "\nExamples:\n"
+            + HelpExampleCli("z_verifydisclosure", "\"zdisc1...\"")
+            + HelpExampleCli("z_verifydisclosure", "\"odisc1...\"")
+            + HelpExampleRpc("z_verifydisclosure", "\"zdisc1...\"")
+        );
+
+    LOCK(cs_main);
+
+    // Parse the bech32-encoded disclosure and verify (auto-detects type)
+    std::string disclosureStr = params[0].get_str();
+    UnifiedDisclosureVerificationResult result = VerifyPaymentDisclosure(disclosureStr);
+    
+    if (!result.success) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, result.error);
+    }
+
+    // Build JSON result
+    UniValue jsonResult(UniValue::VOBJ);
+    jsonResult.push_back(Pair("disclosure_type", result.disclosureType));
+    jsonResult.push_back(Pair("txid", result.txid.GetHex()));
+    
+    // Use appropriate field name based on disclosure type
+    if (result.disclosureType == "Orchard") {
+        jsonResult.push_back(Pair("action_index", static_cast<int>(result.outputIndex)));
+    } else {
+        jsonResult.push_back(Pair("output_index", static_cast<int>(result.outputIndex)));
+    }
+    
+    jsonResult.push_back(Pair("value", ValueFromAmount(result.value)));
+    jsonResult.push_back(Pair("address", result.address));
+    jsonResult.push_back(Pair("memo", result.memoHex));
+
+    return jsonResult;
+}
+
 
 static const CRPCCommand commands[] =
 { //  category              name                        actor (function)           okSafeMode
@@ -9717,6 +9915,9 @@ static const CRPCCommand commands[] =
     { "wallet",             "z_listaddresses",          &z_listaddresses,          true  },
     { "wallet",             "z_exportkey",              &z_exportkey,              true  },
     { "wallet",             "z_exportseedphrase",       &z_exportseedphrase,       true  },
+    { "wallet",             "z_exportsaplingdisclosure", &z_exportsaplingdisclosure, true  },
+    { "wallet",             "z_exportorcharddisclosure", &z_exportorcharddisclosure, true  },
+    { "wallet",             "z_verifydisclosure",        &z_verifydisclosure,        false },
     { "wallet",             "z_importkey",              &z_importkey,              true  },
     { "wallet",             "z_exportviewingkey",       &z_exportviewingkey,       true  },
     { "wallet",             "z_importviewingkey",       &z_importviewingkey,       true  },
@@ -9724,11 +9925,8 @@ static const CRPCCommand commands[] =
     { "wallet",             "z_importwallet",           &z_importwallet,           true  },
     { "wallet",             "z_viewtransaction",        &z_viewtransaction,        true  },
     { "wallet",             "rescan",                   &rescan,                   true  },
-    // TODO: rearrange into another category
-    { "disclosure",         "z_getpaymentdisclosure",   &z_getpaymentdisclosure,   true  },
-    { "disclosure",         "z_validatepaymentdisclosure", &z_validatepaymentdisclosure, true },
 
-    // { "consolidation",         "enableconsolidation",      &enableconsolidation,       true },
+    // { "consolidation",         "enableconsolidation",      &enableconsolidation",       true },
     { "consolidation",         "consolidationstatus",      &consolidationstatus,       true },
     { "consolidation",         "consolidateaddress",       &consolidateaddress,        true },
     { "sweep",                  "sweepstatus",             &sweepstatus,               true }

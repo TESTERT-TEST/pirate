@@ -398,6 +398,7 @@ OrchardPaymentAddressPirate CWallet::GenerateNewOrchardZKey()
 
     } while (HaveOrchardSpendingKey(extfvk));
 
+    // Get external IVK and address
     auto ivkOpt = extfvk.fvk.GetIVK();
     auto addressOpt = extfvk.fvk.GetDefaultAddress();
 
@@ -412,7 +413,7 @@ OrchardPaymentAddressPirate CWallet::GenerateNewOrchardZKey()
     if (fFileBacked && !CWalletDB(strWalletFile).WriteHDChain(hdChain))
         throw std::runtime_error("CWallet::GenerateNewSaplingZKey(): Writing HD chain model failed");
 
-    //Populate Metat Data
+    // Populate metadata for external IVK
     mapOrchardSpendingKeyMetadata[ivk] = metadata;
 
     if (!AddOrchardZKey(xsk)) {
@@ -671,7 +672,7 @@ OrchardPaymentAddressPirate CWallet::GenerateNewOrchardDiversifiedAddress()
     while (!found);
 
     //Add to wallet
-    if (!AddOrchardIncomingViewingKey(ivk, addr)) {
+    if (!AddOrchardIncomingViewingKey(ivk, addr, OrchardKeyScope::External)) {
         throw std::runtime_error("CWallet::GenerateNewOrchardDiversifiedAddress(): AddOrchardIncomingViewingKey failed");
     }
 
@@ -1252,7 +1253,7 @@ bool CWallet::AddOrchardZKey(
     }
     auto extfvk = extfvkOpt.value();
 
-    //Get OrchardIncomingViewingKey
+    //Get OrchardIncomingViewingKey (external)
     auto ivkOpt = extfvk.fvk.GetIVK();
     if (ivkOpt == std::nullopt) {
         return false;
@@ -1269,6 +1270,7 @@ bool CWallet::AddOrchardZKey(
             return true;
         }
 
+        // Write spending key once (using external IVK as primary key)
         if(!CWalletDB(strWalletFile).WriteOrchardZKey(ivk, extsk, mapOrchardSpendingKeyMetadata[ivk])) {
             LogPrintf("Writing unencrypted Orchard Spending Key failed!!!\n");
             return false;
@@ -1366,7 +1368,8 @@ bool CWallet::AddOrchardExtendedFullViewingKey(const libzcash::OrchardExtendedFu
  */
 bool CWallet::AddOrchardIncomingViewingKey(
     const libzcash::OrchardIncomingViewingKeyPirate &ivk,
-    const libzcash::OrchardPaymentAddressPirate &addr)
+    const libzcash::OrchardPaymentAddressPirate &addr,
+    OrchardKeyScope scope)
 {
     AssertLockHeld(cs_wallet);
 
@@ -1374,7 +1377,7 @@ bool CWallet::AddOrchardIncomingViewingKey(
         return false;
     }
 
-    if (!CCryptoKeyStore::AddOrchardIncomingViewingKey(ivk, addr)) {
+    if (!CCryptoKeyStore::AddOrchardIncomingViewingKey(ivk, addr, scope)) {
         return false;
     }
 
@@ -1383,12 +1386,13 @@ bool CWallet::AddOrchardIncomingViewingKey(
     }
 
     if (!IsCrypted()) {
-        return CWalletDB(strWalletFile).WriteOrchardPaymentAddress(ivk, addr);
+        return CWalletDB(strWalletFile).WriteOrchardPaymentAddress(ivk, addr, scope);
     } else {
 
         std::vector<unsigned char> vchCryptedSecret;
         uint256 chash = HashWithFP(addr);
-        CKeyingMaterial vchSecret = SerializeForEncryptionInput(addr, ivk);
+        uint8_t scopeValue = static_cast<uint8_t>(scope);
+        CKeyingMaterial vchSecret = SerializeForEncryptionInput(addr, ivk, scopeValue);
 
         if (!EncryptSerializedWalletObjects(vchSecret, chash, vchCryptedSecret)) {
             LogPrintf("Encrypting Address failed!!!\n");
@@ -1400,6 +1404,120 @@ bool CWallet::AddOrchardIncomingViewingKey(
     }
 
     return true;
+}
+
+/**
+ * @brief Rederive the correct scope for all Orchard addresses in the wallet
+ * @return true if all scopes were successfully rederived and updated, false otherwise
+ * 
+ * This function is used to fix wallets that were created before scope tracking was
+ * implemented. It iterates through all Orchard full viewing keys and derives both
+ * external (scope 0) and internal (scope 1) IVKs from each FVK. Each address in the
+ * wallet is then checked to determine which IVK it belongs to, and the correct scope
+ * is updated in the database.
+ * 
+ * This is critical for proper change address detection and transaction scanning.
+ * Should be called during wallet upgrade or when scope inconsistencies are detected.
+ */
+bool CWallet::RederiveOrchardAddressScopes()
+{
+    AssertLockHeld(cs_wallet);
+    
+    LogPrintf("RederiveOrchardAddressScopes: Starting scope validation for Orchard addresses\n");
+    
+    // Build a map of IVK -> scope from all full viewing keys
+    std::map<libzcash::OrchardIncomingViewingKeyPirate, OrchardKeyScope> ivkScopeMap;
+    
+    // Process full viewing keys (includes spending keys, view-only keys, and watch-only keys)
+    // Each FVK has both an external IVK (scope 0) and internal IVK (scope 1)
+    for (const auto& [ivkWithScope, extfvk] : mapOrchardFullViewingKeys) {
+        // Derive external IVK (scope 0)
+        auto ivkExternalOpt = extfvk.fvk.GetIVK();
+        if (ivkExternalOpt) {
+            auto ivkExternal = ivkExternalOpt.value();
+            ivkScopeMap[ivkExternal] = OrchardKeyScope::External;
+            LogPrintf("RederiveOrchardAddressScopes: Registered external IVK (scope: 0)\n");
+        } else {
+            LogPrintf("RederiveOrchardAddressScopes: Failed to derive external IVK from FVK\n");
+        }
+        
+        // Derive internal IVK (scope 1)
+        auto ivkInternalOpt = extfvk.fvk.GetIVKinternal();
+        if (ivkInternalOpt) {
+            auto ivkInternal = ivkInternalOpt.value();
+            ivkScopeMap[ivkInternal] = OrchardKeyScope::Internal;
+            LogPrintf("RederiveOrchardAddressScopes: Registered internal IVK (scope: 1)\n");
+        } else {
+            LogPrintf("RederiveOrchardAddressScopes: Failed to derive internal IVK from FVK\n");
+        }
+    }
+    
+    if (ivkScopeMap.empty()) {
+        LogPrintf("RederiveOrchardAddressScopes: No Orchard keys found in wallet\n");
+        return true; // Nothing to do
+    }
+    
+    // Now update all addresses with their correct scope
+    int updated = 0;
+    int failed = 0;
+    
+    for (auto& [addr, ivkScopePair] : mapOrchardIncomingViewingKeys) {
+        const auto& currentIvk = ivkScopePair.first;
+        OrchardKeyScope currentScope = ivkScopePair.second;
+        
+        // Look up the correct scope for this IVK
+        auto it = ivkScopeMap.find(currentIvk);
+        if (it == ivkScopeMap.end()) {
+            LogPrintf("RederiveOrchardAddressScopes: Warning - IVK not found in derived map, keeping current scope\n");
+            continue;
+        }
+        
+        OrchardKeyScope correctScope = it->second;
+        
+        // Update if scope differs
+        if (currentScope != correctScope) {
+            LogPrintf("RederiveOrchardAddressScopes: Updating address scope from %d to %d\n", 
+                     static_cast<int>(currentScope), static_cast<int>(correctScope));
+            
+            // Update in-memory map
+            ivkScopePair.second = correctScope;
+            
+            // Update database
+            if (fFileBacked) {
+                if (!IsCrypted()) {
+                    if (!CWalletDB(strWalletFile).WriteOrchardPaymentAddress(currentIvk, addr, correctScope)) {
+                        LogPrintf("RederiveOrchardAddressScopes: Failed to write updated scope to database\n");
+                        failed++;
+                        continue;
+                    }
+                } else {
+                    // For encrypted wallets, we need to re-encrypt with the new scope
+                    std::vector<unsigned char> vchCryptedSecret;
+                    uint256 chash = HashWithFP(addr);
+                    uint8_t scopeValue = static_cast<uint8_t>(correctScope);
+                    CKeyingMaterial vchSecret = SerializeForEncryptionInput(addr, currentIvk, scopeValue);
+                    
+                    if (!EncryptSerializedWalletObjects(vchSecret, chash, vchCryptedSecret)) {
+                        LogPrintf("RederiveOrchardAddressScopes: Failed to encrypt address with new scope\n");
+                        failed++;
+                        continue;
+                    }
+                    
+                    if (!CWalletDB(strWalletFile).WriteCryptedOrchardPaymentAddress(addr, chash, vchCryptedSecret)) {
+                        LogPrintf("RederiveOrchardAddressScopes: Failed to write encrypted scope to database\n");
+                        failed++;
+                        continue;
+                    }
+                }
+            }
+            
+            updated++;
+        }
+    }
+    
+    LogPrintf("RederiveOrchardAddressScopes: Complete - updated %d addresses, %d failed\n", updated, failed);
+    
+    return (failed == 0);
 }
 
 /**
@@ -2093,9 +2211,11 @@ bool CWallet::LoadSaplingPaymentAddress(
  */
 bool CWallet::LoadOrchardPaymentAddress(
     const libzcash::OrchardPaymentAddressPirate &addr,
-    const libzcash::OrchardIncomingViewingKeyPirate &ivk)
+    const libzcash::OrchardIncomingViewingKeyPirate &ivk,
+    OrchardKeyScope scope)
 {
-    return CCryptoKeyStore::AddOrchardIncomingViewingKey(ivk, addr);
+    // Use the persisted scope from database
+    return CCryptoKeyStore::AddOrchardIncomingViewingKey(ivk, addr, scope);
 }
 
 /**
@@ -2151,13 +2271,27 @@ bool CWallet::LoadCryptedOrchardPaymentAddress(const uint256 &chash, const std::
         return false;
     }
 
+    // Manually deserialize to handle backward compatibility
+    CSecureDataStream ss(vchSecret, SER_NETWORK, PROTOCOL_VERSION);
     libzcash::OrchardIncomingViewingKeyPirate ivk;
-    DeserializeFromDecryptionOutput(vchSecret, addr, ivk);
+    ss >> addr >> ivk;
+    
+    // Try to read scope if available (new format), otherwise default to External (old format)
+    uint8_t scopeValue = static_cast<uint8_t>(OrchardKeyScope::External);
+    try {
+        if (!ss.empty()) {
+            ss >> scopeValue;
+        }
+    } catch (...) {
+        // Ignore error, use default External scope
+    }
+    
     if(HashWithFP(addr) != chash) {
         return false;
     }
 
-    return CCryptoKeyStore::AddOrchardIncomingViewingKey(ivk, addr);
+    OrchardKeyScope scope = static_cast<OrchardKeyScope>(scopeValue);
+    return CCryptoKeyStore::AddOrchardIncomingViewingKey(ivk, addr, scope);
 }
 
 /**
@@ -4456,7 +4590,7 @@ bool CWallet::ValidateSaplingWalletTrackedPositions(const CBlockIndex* pindex) {
 
     int64_t nNow = GetTime();
     int valperc = 0;
-    int i = 0;
+    int t = -1;
     int walletSize = mapWallet.size();
     bool uiShown = false;
 
@@ -4465,7 +4599,8 @@ bool CWallet::ValidateSaplingWalletTrackedPositions(const CBlockIndex* pindex) {
         uint256 txid = (*it).first;
         CWalletTx *pwtx = &(*it).second;
 
-        valperc = i/walletSize;
+        t++;
+        valperc = (t * 100) / walletSize;
         if (GetTime() >= nNow + 60) {
             nNow = GetTime();
             LogPrintf("Validating Note Postions... Progress=%d\n", valperc );
@@ -4600,7 +4735,7 @@ bool CWallet::ValidateOrchardWalletTrackedPositions(const CBlockIndex* pindex) {
 
     int64_t nNow = GetTime();
     int valperc = 0;
-    int i = 0;
+    int t = -1;
     int walletSize = mapWallet.size();
     bool uiShown = false;
 
@@ -4609,7 +4744,8 @@ bool CWallet::ValidateOrchardWalletTrackedPositions(const CBlockIndex* pindex) {
         uint256 txid = (*it).first;
         CWalletTx *pwtx = &(*it).second;
 
-        valperc = i/walletSize;
+        t++;
+        valperc = (t * 100) / walletSize;
         if (GetTime() >= nNow + 60) {
             nNow = GetTime();
             LogPrintf("Validating Note Postions... Progress=%d\n", valperc );
@@ -4733,7 +4869,7 @@ bool CWallet::ValidateOrchardWalletTrackedPositions(const CBlockIndex* pindex) {
  * wallet synchronized with the blockchain state. It ensures that all
  * Sapling notes can be properly spent and that witnesses remain valid.
  */
-void CWallet::IncrementSaplingWallet(const CBlockIndex* pindex, const CBlock* pblock) {
+void CWallet::IncrementSaplingWallet(const CBlockIndex* pindex, const CBlock* pblock, bool suppressProgress) {
 
     AssertLockHeld(cs_main);
     AssertLockHeld(cs_wallet);
@@ -4838,7 +4974,7 @@ void CWallet::IncrementSaplingWallet(const CBlockIndex* pindex, const CBlock* pb
 
                 //Report Progress to the GUI and log file
                 int witnessHeight = pblockindex->nHeight;
-                if ((witnessHeight % 100 == 0 || GetTime() >= nNow1 + 15) && witnessHeight < chainHeight - 5 ) {
+                if (!suppressProgress && (witnessHeight % 100 == 0 || GetTime() >= nNow1 + 15) && witnessHeight < chainHeight - 5 ) {
                     nNow1 = GetTime();
                     if (!uiShown) {
                         uiShown = true;
@@ -4868,7 +5004,7 @@ void CWallet::IncrementSaplingWallet(const CBlockIndex* pindex, const CBlock* pb
                 pblockindex = chainActive.Next(pblockindex);
             }
 
-            if (uiShown) {
+            if (!suppressProgress && uiShown) {
                 uiInterface.ShowProgress(_("Sapling Wallet Rebuild Complete..."), 100, false);
             }
 
@@ -4915,7 +5051,7 @@ void CWallet::IncrementSaplingWallet(const CBlockIndex* pindex, const CBlock* pb
  * wallet synchronized with the blockchain state. It ensures that all
  * Orchard notes can be properly spent and that witnesses remain valid.
  */
-void CWallet::IncrementOrchardWallet(const CBlockIndex* pindex, const CBlock* pblock) {
+void CWallet::IncrementOrchardWallet(const CBlockIndex* pindex, const CBlock* pblock, bool suppressProgress) {
 
     AssertLockHeld(cs_main);
     AssertLockHeld(cs_wallet);
@@ -5020,7 +5156,7 @@ void CWallet::IncrementOrchardWallet(const CBlockIndex* pindex, const CBlock* pb
 
                 //Report Progress to the GUI and log file
                 int witnessHeight = pblockindex->nHeight;
-                if ((witnessHeight % 100 == 0 || GetTime() >= nNow1 + 15) && witnessHeight < chainHeight - 5 ) {
+                if (!suppressProgress && (witnessHeight % 100 == 0 || GetTime() >= nNow1 + 15) && witnessHeight < chainHeight - 5 ) {
                     nNow1 = GetTime();
                     if (!uiShown) {
                         uiShown = true;
@@ -5050,7 +5186,7 @@ void CWallet::IncrementOrchardWallet(const CBlockIndex* pindex, const CBlock* pb
                 pblockindex = chainActive.Next(pblockindex);
             }
 
-            if (uiShown) {
+            if (!suppressProgress && uiShown) {
                 uiInterface.ShowProgress(_("Witness Cache Complete..."), 100, false);
             }
 
@@ -5448,7 +5584,7 @@ bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
         }
 
         //Encrypt Orchard Extended Full Viewing keys
-        for (map<libzcash::OrchardIncomingViewingKeyPirate, libzcash::OrchardExtendedFullViewingKeyPirate>::iterator it = mapOrchardFullViewingKeys.begin(); it != mapOrchardFullViewingKeys.end(); ++it) {
+        for (OrchardFullViewingKeyMap::iterator it = mapOrchardFullViewingKeys.begin(); it != mapOrchardFullViewingKeys.end(); ++it) {
               if (!HaveOrchardSpendingKey((*it).second)) {
                   if (!AddOrchardExtendedFullViewingKey((*it).second)) {
                       LogPrintf("Setting encrypted orchard viewing key failed!!!\n");
@@ -5467,9 +5603,12 @@ bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
         }
 
         //Encrypt OrchardPaymentAddress
-        for (map<libzcash::OrchardPaymentAddressPirate, libzcash::OrchardIncomingViewingKeyPirate>::iterator it = mapOrchardIncomingViewingKeys.begin(); it != mapOrchardIncomingViewingKeys.end(); it++)
+        for (auto it = mapOrchardIncomingViewingKeys.begin(); it != mapOrchardIncomingViewingKeys.end(); it++)
         {
-            if (!AddOrchardIncomingViewingKey((*it).second, (*it).first)) {
+            const auto& addr = it->first;
+            const auto& ivk = it->second.first;
+            const auto& scope = it->second.second;
+            if (!AddOrchardIncomingViewingKey(ivk, addr, scope)) {
                 LogPrintf("Setting encrypted orchard payment address failed!!!\n");
                 return false;
             }
@@ -6174,12 +6313,18 @@ void CWallet::UpdateOrchardNullifierNoteMapWithTx(CWalletTx* wtx) {
        else {
            uint64_t position = nd.getPosition().value();
            // Skip if we only have incoming viewing key
-           if (mapOrchardFullViewingKeys.count(nd.ivk) != 0) {
-               OrchardExtendedFullViewingKeyPirate extfvk = mapOrchardFullViewingKeys.at(nd.ivk);
+           OrchardIVKWithScope ivkExternal = {nd.ivk, OrchardKeyScope::External};
+           OrchardIVKWithScope ivkInternal = {nd.ivk, OrchardKeyScope::Internal};
+           if (mapOrchardFullViewingKeys.count(ivkExternal) != 0 || mapOrchardFullViewingKeys.count(ivkInternal) != 0) {
+               OrchardExtendedFullViewingKeyPirate extfvk = mapOrchardFullViewingKeys.count(ivkExternal) != 0 
+                   ? mapOrchardFullViewingKeys.at(ivkExternal)
+                   : mapOrchardFullViewingKeys.at(ivkInternal);
 
                // Compute nullifier directly from Action using bridge
+               // Use the IVK stored in note data (could be external or internal)
                auto optNullifier = libzcash::OrchardNotePlaintext::ComputeNullifierFromAction(
                    vActions[op.n],
+                   nd.ivk,
                    extfvk.fvk
                );
 
@@ -6419,7 +6564,9 @@ void CWallet::AddToWalletIfInvolvingMe(
         for (const auto &orchardAddressToAdd : orchardAddressesToAdd) {
             //Loaded into memory only
             //This will be saved during the wallet SetBestChainINTERNAL
-            CCryptoKeyStore::AddOrchardIncomingViewingKey(orchardAddressToAdd.second, orchardAddressToAdd.first);
+            const auto& ivk = orchardAddressToAdd.second.first;
+            const auto& scope = orchardAddressToAdd.second.second;
+            CCryptoKeyStore::AddOrchardIncomingViewingKey(ivk, orchardAddressToAdd.first, scope);
             //Store addresses to notify GUI later
             orchardAddressesFound.insert(orchardAddressToAdd.first);
         }
@@ -6794,7 +6941,7 @@ mapSproutNoteData_t CWallet::FindMySproutNotes(const CTransaction &tx) const
  */
 static void DecryptOrchardNoteWorker(
     const CWallet *wallet,
-    const std::vector<const OrchardIncomingViewingKeyPirate*> vIvk,
+    const std::vector<std::pair<const OrchardIncomingViewingKeyPirate*, OrchardKeyScope>> vIvkWithScope,
     const std::vector<orchard_bundle::Action*> vOrchardEncryptedAction,
     const std::vector<uint32_t> vPosition,
     const std::vector<uint256> vHash,
@@ -6803,9 +6950,10 @@ static void DecryptOrchardNoteWorker(
     OrchardIncomingViewingKeyMap *viewingKeysToAdd,
     int threadNumber)
 {
-    for (int i = 0; i < vIvk.size(); i++) {
+    for (int i = 0; i < vIvkWithScope.size(); i++) {
 
-        OrchardIncomingViewingKeyPirate ivk = *vIvk[i];
+        OrchardIncomingViewingKeyPirate ivk = *vIvkWithScope[i].first;
+        OrchardKeyScope scope = vIvkWithScope[i].second;
         auto result = OrchardNotePlaintext::AttemptDecryptOrchardAction(vOrchardEncryptedAction[i], ivk);
         if (result != std::nullopt) {
 
@@ -6826,7 +6974,7 @@ static void DecryptOrchardNoteWorker(
                 //dust filter
                 {
                     LOCK(wallet->cs_wallet_threadedfunction);
-                    viewingKeysToAdd->insert(make_pair(nd.address, nd.ivk));
+                    viewingKeysToAdd->insert(make_pair(nd.address, std::make_pair(nd.ivk, scope)));
                     noteData->insert(std::make_pair(op, nd));
                 }
             }
@@ -6859,9 +7007,9 @@ std::pair<mapOrchardNoteData_t, OrchardIncomingViewingKeyMap> CWallet::FindMyOrc
     mapOrchardNoteData_t noteData;
     OrchardIncomingViewingKeyMap viewingKeysToAdd;
 
-    //Create key thread buckets
-    std::vector<const OrchardIncomingViewingKeyPirate*> vIvk;
-    std::vector<std::vector<const OrchardIncomingViewingKeyPirate*>> vvIvk;
+    //Create key+scope thread buckets
+    std::vector<std::pair<const OrchardIncomingViewingKeyPirate*, OrchardKeyScope>> vIvkWithScope;
+    std::vector<std::vector<std::pair<const OrchardIncomingViewingKeyPirate*, OrchardKeyScope>>> vvIvkWithScope;
 
     //Create Output thread buckets
     std::vector<orchard_bundle::Action*> vOrchardEncryptedAction;
@@ -6876,7 +7024,7 @@ std::pair<mapOrchardNoteData_t, OrchardIncomingViewingKeyMap> CWallet::FindMyOrc
     std::vector<std::vector<uint256>> vvHash;
 
     for (uint32_t i = 0; i < maxProcessingThreads; i++) {
-        vvIvk.emplace_back(vIvk);
+        vvIvkWithScope.emplace_back(vIvkWithScope);
         vvOrchardEncryptedAction.emplace_back(vOrchardEncryptedAction);
         vvPosition.emplace_back(vPosition);
         vvHash.emplace_back(vHash);
@@ -6894,7 +7042,7 @@ std::pair<mapOrchardNoteData_t, OrchardIncomingViewingKeyMap> CWallet::FindMyOrc
 
             //Create a tread entry for every ivk with the current note.
             for (auto it = setOrchardIncomingViewingKeys.begin(); it != setOrchardIncomingViewingKeys.end(); it++) {
-                vvIvk[t].emplace_back(&(*it));
+                vvIvkWithScope[t].emplace_back(&(it->first), it->second);
                 vvPosition[t].emplace_back(i);
                 vvHash[t].emplace_back(hash);
                 vvOrchardEncryptedAction[t].emplace_back(action);
@@ -6902,16 +7050,16 @@ std::pair<mapOrchardNoteData_t, OrchardIncomingViewingKeyMap> CWallet::FindMyOrc
                 //Increment ivk vector
                 t++;
                 //reset if ivk vector is greater qty of threads being used
-                if (t >= vvIvk.size()) {
+                if (t >= vvIvkWithScope.size()) {
                     t = 0;
                 }
             }
         }
 
         std::vector<boost::thread*> decryptionThreads;
-        for (uint32_t i = 0; i < vvIvk.size(); i++) {
-            if(!vvIvk[i].empty()) {
-                decryptionThreads.emplace_back(new boost::thread(DecryptOrchardNoteWorker, this, vvIvk[i], vvOrchardEncryptedAction[i], vvPosition[i], vvHash[i], height, &noteData, &viewingKeysToAdd, i));
+        for (uint32_t i = 0; i < vvIvkWithScope.size(); i++) {
+            if(!vvIvkWithScope[i].empty()) {
+                decryptionThreads.emplace_back(new boost::thread(DecryptOrchardNoteWorker, this, vvIvkWithScope[i], vvOrchardEncryptedAction[i], vvPosition[i], vvHash[i], height, &noteData, &viewingKeysToAdd, i));
             }
         }
 
@@ -6922,8 +7070,8 @@ std::pair<mapOrchardNoteData_t, OrchardIncomingViewingKeyMap> CWallet::FindMyOrc
         }
 
         //Rest Vectors for next transaction
-        for (uint32_t i = 0; i < vvIvk.size(); i++) {
-            vvIvk[i].resize(0);
+        for (uint32_t i = 0; i < vvIvkWithScope.size(); i++) {
+            vvIvkWithScope[i].resize(0);
             vvOrchardEncryptedAction[i].resize(0);
             vvPosition[i].resize(0);
             vvHash[i].resize(0);
@@ -6932,7 +7080,7 @@ std::pair<mapOrchardNoteData_t, OrchardIncomingViewingKeyMap> CWallet::FindMyOrc
     }
 
     //clean up vectors
-    vvIvk.resize(0);
+    vvIvkWithScope.resize(0);
     vvOrchardEncryptedAction.resize(0);
     vvPosition.resize(0);
     vvHash.resize(0);
@@ -8709,20 +8857,16 @@ void CWallet::ReorderWalletTransactions(std::map<std::pair<int,int>, CWalletTx*>
 
     int maxSortNumber = chainActive.Tip()->nHeight + 1;
 
-    for (map<uint256, CWalletTx>::iterator it = mapWallet.begin(); it != mapWallet.end(); ++it)
+    for (auto& [hash, wtx] : mapWallet)
     {
-        CWalletTx* pwtx = &(it->second);
-        maxOrderPos = max(maxOrderPos, pwtx->nOrderPos);
+        maxOrderPos = std::max(maxOrderPos, wtx.nOrderPos);
 
-        if (mapBlockIndex.count(pwtx->hashBlock) > 0) {
-            int wtxHeight = mapBlockIndex[pwtx->hashBlock]->nHeight;
-            auto key = std::make_pair(wtxHeight, pwtx->nIndex);
-            mapSorted.insert(make_pair(key, pwtx));
-        }
-        else {
-            auto key = std::make_pair(maxSortNumber, 0);
-            mapSorted.insert(std::make_pair(key, pwtx));
-            maxSortNumber++;
+        // Use find() to avoid double lookup
+        auto blockIt = mapBlockIndex.find(wtx.hashBlock);
+        if (blockIt != mapBlockIndex.end()) {
+            mapSorted.emplace(std::make_pair(blockIt->second->nHeight, wtx.nIndex), &wtx);
+        } else {
+            mapSorted.emplace(std::make_pair(maxSortNumber++, 0), &wtx);
         }
     }
 }
@@ -8745,45 +8889,23 @@ void CWallet::ReorderWalletTransactions(std::map<std::pair<int,int>, CWalletTx*>
  * 
  * Requires both cs_main and cs_wallet locks for thread safety.
  */
-void CWallet::UpdateWalletTransactionOrder(std::map<std::pair<int,int>, CWalletTx*> &mapSorted, bool resetOrder) {
+void CWallet::UpdateWalletTransactionOrder(std::map<std::pair<int,int>, CWalletTx*> &mapSorted) {
     AssertLockHeld(cs_main);
     AssertLockHeld(cs_wallet);
 
-   int64_t previousPosition = 0;
-   std::map<const uint256, CWalletTx*> mapUpdatedTxs;
+   int64_t nOrderPos = 0;
 
-   //Check the postion of each transaction relative to the previous one.
-   for (map<std::pair<int,int>, CWalletTx*>::iterator it = mapSorted.begin(); it != mapSorted.end(); ++it) {
-       CWalletTx* pwtx = it->second;
-       const uint256 wtxid = pwtx->GetHash();
-
-       if (pwtx->nOrderPos <= previousPosition || resetOrder) {
-           previousPosition++;
-           pwtx->nOrderPos = previousPosition;
-           mapUpdatedTxs.insert(std::make_pair(wtxid, pwtx));
-       }
-       else {
-           previousPosition = pwtx->nOrderPos;
-       }
+   // Update transaction positions in single pass
+   // Note: mapSorted contains pointers to transactions already in mapWallet,
+   // so modifying pwtx->nOrderPos directly updates mapWallet
+   for (const auto& [key, pwtx] : mapSorted) {
+       pwtx->nOrderPos = ++nOrderPos;
    }
 
-  //Update transactions nOrderPos for transactions that changed
-  CWalletDB walletdb(strWalletFile, "r+", false);
-  ArchiveTxPoint arcTxPt;
-  for (map<const uint256, CWalletTx*>::iterator it = mapUpdatedTxs.begin(); it != mapUpdatedTxs.end(); ++it) {
-      CWalletTx* pwtx = it->second;
-      LogPrint("deletetx","Reorder Tx - Updating Positon to %i for Tx %s\n ", pwtx->nOrderPos, pwtx->GetHash().ToString());;
-      const auto itmw = mapWallet.find(pwtx->GetHash());
-      if (itmw != mapWallet.end()) {
-          mapWallet[pwtx->GetHash()].nOrderPos = pwtx->nOrderPos;
-      }
-  }
-
-  //Update Next Wallet Tx Positon
-  nOrderPosNext = previousPosition++;
+  //Update Next Wallet Tx Position
+  nOrderPosNext = nOrderPos + 1;
   CWalletDB(strWalletFile).WriteOrderPosNext(nOrderPosNext);
-  LogPrint("deletetx","Reorder Tx - Total Transactions Reordered %i, Next Position %i\n ", mapUpdatedTxs.size(), nOrderPosNext);
-
+  LogPrint("deletetx","Reorder Tx - Total Transactions Reordered %i, Next Position %i\n ", (int)mapSorted.size(), nOrderPosNext);
 }
 
 /**
@@ -8821,6 +8943,7 @@ bool CWallet::DeleteTransactions(std::vector<uint256> &removeTxs, std::vector<ui
 
         //remove transaction tracking from the witness tree
         saplingWallet.UnMarkNoteForTransaction(removeTxs[i]);
+        orchardWallet.UnMarkNoteForTransaction(removeTxs[i]);
 
         //remove transaction from the wallet
         if (EraseFromWallet(removeTxs[i])) {
@@ -8849,8 +8972,9 @@ bool CWallet::DeleteTransactions(std::vector<uint256> &removeTxs, std::vector<ui
         }
     }
 
-    //Cleanup the sapling wallet witness tree
+    //Cleanup the witness tree
     saplingWallet.GarbageCollect();
+    orchardWallet.GarbageCollect();
 
     // Miodrag: release memory back to the OS, only works on linux
     #ifdef __linux__
@@ -8907,14 +9031,7 @@ bool CWallet::DeleteWalletTransactions(const CBlockIndex* pindex, bool fRescan) 
         int64_t maxOrderPos = 0;
         std::map<std::pair<int,int>, CWalletTx*> mapSorted;
         ReorderWalletTransactions(mapSorted, maxOrderPos);
-        if (maxOrderPos > int64_t(mapSorted.size())*10) {
-          //reset the postion when the max postion is 10x bigger than the
-          //number of transactions in the wallet
-          UpdateWalletTransactionOrder(mapSorted, true);
-        }
-        else {
-          UpdateWalletTransactionOrder(mapSorted, false);
-        }
+        UpdateWalletTransactionOrder(mapSorted);
         auto reorderTime = GetTime();
         LogPrint("deletetx","Delete Tx - Time to Reorder %s\n", DateTimeStrFormat("%H:%M:%S", reorderTime-startTime));
 
@@ -9264,6 +9381,10 @@ bool CWallet::initalizeArcTx() {
  * 
  * @note In cold storage mode (nMaxConnections == 0), this function returns false immediately
  */
+
+// Global flag to suppress nested progress dialogs during rescan
+static bool fInRescan = false;
+
 int CWallet::ScanForWalletTransactions(CBlockIndex* pindexStart, bool fUpdate, bool fIgnoreBirthday, bool LockOnFinish, bool resetWallets)
 {
     if (nMaxConnections == 0) {
@@ -9273,6 +9394,9 @@ int CWallet::ScanForWalletTransactions(CBlockIndex* pindexStart, bool fUpdate, b
     LOCK2(cs_main, cs_wallet);
     //Notify GUI of rescan
     NotifyRescanStarted();
+    
+    // Set flag to suppress nested progress dialogs
+    fInRescan = true;
 
     int ret = 0;
     int64_t nNow = GetTime();
@@ -9380,8 +9504,9 @@ int CWallet::ScanForWalletTransactions(CBlockIndex* pindexStart, bool fUpdate, b
             //Update the Sapling and Orchard Wallet Merkle tree and set transaction nullifiers
             //This needs to be done after processing the block to ensure
             //that subsequent spends can be detected
-            IncrementSaplingWallet(pindex, &block);
-            IncrementOrchardWallet(pindex, &block);
+            // Pass true to suppress progress dialogs (rescan already shows its own progress)
+            IncrementSaplingWallet(pindex, &block, true);
+            IncrementOrchardWallet(pindex, &block, true);
 
             pindex = chainActive.Next(pindex);
             
@@ -9412,13 +9537,6 @@ int CWallet::ScanForWalletTransactions(CBlockIndex* pindexStart, bool fUpdate, b
 
     for (std::set<OrchardPaymentAddressPirate>::iterator it = orchardAddressesFound.begin(); it != orchardAddressesFound.end(); it++) {
         SetZAddressBook(*it, "orchard", "", true);
-    }
-
-    //Notify GUI of all new transactions found
-    for (set<uint256>::iterator it = txList.begin(); it != txList.end(); ++it)
-    {
-        bool fInsertedNew = (txListOriginal.count(*it) == 0);
-        NotifyTransactionChanged(this, *it, fInsertedNew ? CT_NEW : CT_UPDATED);
     }
 
     //Notify GUI of changes in balances
@@ -13525,7 +13643,7 @@ KeyAddResult AddDiversifiedViewingKeyToWallet::operator()(const libzcash::Orchar
     }
 
     // Attempt to add the incoming viewing key for the diversified address
-    if (m_wallet->AddOrchardIncomingViewingKey(ivk, addr)) {
+    if (m_wallet->AddOrchardIncomingViewingKey(ivk, addr, OrchardKeyScope::External)) {
         if (result == SpendingKeyExists || result == KeyAlreadyExists) {
             return KeyExistsAddressAdded;
         } else {
@@ -13765,7 +13883,7 @@ KeyAddResult AddDiversifiedSpendingKeyToWallet::operator()(const libzcash::Orcha
         result = KeyAdded;
     }
 
-    if (m_wallet->AddOrchardIncomingViewingKey(ivk, addr)) {
+    if (m_wallet->AddOrchardIncomingViewingKey(ivk, addr, OrchardKeyScope::External)) {
         if (result == KeyAlreadyExists) {
             return KeyExistsAddressAdded;
         } else {

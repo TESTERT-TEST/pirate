@@ -11,138 +11,177 @@
 #include "streams.h"
 #include "version.h"
 
-// For JSOutPoint
-#include "wallet/wallet.h"
-
 #include <array>
 #include <cstdint>
 #include <string>
+#include <optional>
 
+/**
+ * Structure representing a Sapling Output Disclosure with associated transaction information.
+ * This is used for proof-of-payment functionality, allowing someone to prove they paid to a
+ * specific Sapling output without revealing the full spending key.
+ */
+class SaplingOutputDisclosure
+{
+public:
+    uint256 txid;                      // Transaction ID
+    uint32_t outputIndex;              // Output index in the transaction
+    std::array<uint8_t, 32> ock;      // The Outgoing Cipher Key (32 bytes)
 
-// Ensure that the two different protocol messages, payment disclosure blobs and transactions,
-// which are signed with the same key, joinSplitPrivKey, have disjoint encodings such that an
-// encoding from one context will be rejected in the other.  We know that the set of valid
-// transaction versions is currently ({1..INT32_MAX}) so we will use a negative value for
-// payment disclosure of -10328976 which in hex is 0xFF626470.  Serialization is in little endian
-// format, so a payment disclosure hex string begins 706462FF, which in ISO-8859-1 is "pdbÿ".
-#define PAYMENT_DISCLOSURE_PAYLOAD_MAGIC_BYTES    -10328976
+    SaplingOutputDisclosure() : txid(), outputIndex(0), ock() {}
 
-#define PAYMENT_DISCLOSURE_VERSION_EXPERIMENTAL 0
-
-#define PAYMENT_DISCLOSURE_BLOB_STRING_PREFIX    "zpd:"
-
-typedef JSOutPoint PaymentDisclosureKey;
-
-struct PaymentDisclosureInfo {
-    uint8_t version;          // 0 = experimental, 1 = first production version, etc.
-    uint256 esk;              // zcash/NoteEncryption.cpp
-    uint256 joinSplitPrivKey; // primitives/transaction.h
-    // ed25519 - not tied to implementation e.g. libsodium, see ed25519 rfc
-
-    libzcash::SproutPaymentAddress zaddr;
-
-    PaymentDisclosureInfo() : version(PAYMENT_DISCLOSURE_VERSION_EXPERIMENTAL) {
-    }
-
-    PaymentDisclosureInfo(uint8_t v, uint256 esk, uint256 key, libzcash::SproutPaymentAddress zaddr) : version(v), esk(esk), joinSplitPrivKey(key), zaddr(zaddr) { }
+    SaplingOutputDisclosure(const uint256& txid_, uint32_t outputIndex_, const std::array<uint8_t, 32>& ock_)
+        : txid(txid_), outputIndex(outputIndex_), ock(ock_) {}
 
     ADD_SERIALIZE_METHODS;
 
     template <typename Stream, typename Operation>
     inline void SerializationOp(Stream& s, Operation ser_action) {
-        READWRITE(version);
-        READWRITE(esk);
-        READWRITE(joinSplitPrivKey);
-        READWRITE(zaddr);
-    }
-
-    std::string ToString() const;
-
-    friend bool operator==(const PaymentDisclosureInfo& a, const PaymentDisclosureInfo& b) {
-        return (a.version == b.version && a.esk == b.esk && a.joinSplitPrivKey == b.joinSplitPrivKey && a.zaddr == b.zaddr);
-    }
-
-    friend bool operator!=(const PaymentDisclosureInfo& a, const PaymentDisclosureInfo& b) {
-        return !(a == b);
-    }
-
-};
-
-
-struct PaymentDisclosurePayload {
-    int32_t marker = PAYMENT_DISCLOSURE_PAYLOAD_MAGIC_BYTES;  // to be disjoint from transaction encoding
-    uint8_t version;        // 0 = experimental, 1 = first production version, etc.
-    uint256 esk;            // zcash/NoteEncryption.cpp
-    uint256 txid;           // primitives/transaction.h
-    uint64_t js;            // Index into CTransaction.vjoinsplit
-    uint8_t n;              // Index into JSDescription fields of length ZC_NUM_JS_OUTPUTS
-    libzcash::SproutPaymentAddress zaddr; // zcash/Address.hpp
-    std::string message;     // parameter to RPC call
-
-    ADD_SERIALIZE_METHODS;
-
-    template <typename Stream, typename Operation>
-    inline void SerializationOp(Stream& s, Operation ser_action) {
-        READWRITE(marker);
-        READWRITE(version);
-        READWRITE(esk);
         READWRITE(txid);
-        READWRITE(js);
-        READWRITE(n);
-        READWRITE(zaddr);
-        READWRITE(message);
+        READWRITE(outputIndex);
+        // Serialize the OCK array
+        for (size_t i = 0; i < 32; ++i) {
+            READWRITE(ock[i]);
+        }
     }
 
-    std::string ToString() const;
-
-    friend bool operator==(const PaymentDisclosurePayload& a, const PaymentDisclosurePayload& b) {
-        return (
-            a.version == b.version &&
-            a.esk == b.esk &&
-            a.txid == b.txid &&
-            a.js == b.js &&
-            a.n == b.n &&
-            a.zaddr == b.zaddr &&
-            a.message == b.message
-            );
+    bool operator==(const SaplingOutputDisclosure& other) const {
+        return txid == other.txid && outputIndex == other.outputIndex && ock == other.ock;
     }
 
-    friend bool operator!=(const PaymentDisclosurePayload& a, const PaymentDisclosurePayload& b) {
-        return !(a == b);
+    bool operator!=(const SaplingOutputDisclosure& other) const {
+        return !(*this == other);
     }
 };
 
-struct PaymentDisclosure {
-    PaymentDisclosurePayload payload;
-    std::array<unsigned char, 64> payloadSig;
-    // We use boost array because serialize doesn't like char buffer, otherwise we could do: unsigned char payloadSig[64];
+/**
+ * Structure representing an Orchard Output Disclosure with associated transaction information.
+ * This is used for proof-of-payment functionality, allowing someone to prove they paid to a
+ * specific Orchard output without revealing the full spending key.
+ */
+class OrchardOutputDisclosure
+{
+public:
+    uint256 txid;                      // Transaction ID
+    uint32_t outputIndex;              // Output index in the transaction (action index)
+    std::array<uint8_t, 32> ock;      // The Outgoing Cipher Key (32 bytes)
 
-    PaymentDisclosure() {};
-    PaymentDisclosure(const PaymentDisclosurePayload payload, const std::array<unsigned char, 64> sig) : payload(payload), payloadSig(sig) {};
-    PaymentDisclosure(const uint256& joinSplitPubKey, const PaymentDisclosureKey& key, const PaymentDisclosureInfo& info, const std::string& message);
+    OrchardOutputDisclosure() : txid(), outputIndex(0), ock() {}
+
+    OrchardOutputDisclosure(const uint256& txid_, uint32_t outputIndex_, const std::array<uint8_t, 32>& ock_)
+        : txid(txid_), outputIndex(outputIndex_), ock(ock_) {}
 
     ADD_SERIALIZE_METHODS;
 
     template <typename Stream, typename Operation>
     inline void SerializationOp(Stream& s, Operation ser_action) {
-        READWRITE(payload);
-        READWRITE(payloadSig);
+        READWRITE(txid);
+        READWRITE(outputIndex);
+        // Serialize the OCK array
+        for (size_t i = 0; i < 32; ++i) {
+            READWRITE(ock[i]);
+        }
     }
 
-    std::string ToString() const;
-
-    friend bool operator==(const PaymentDisclosure& a, const PaymentDisclosure& b) {
-        return (a.payload == b.payload && a.payloadSig == b.payloadSig);
+    bool operator==(const OrchardOutputDisclosure& other) const {
+        return txid == other.txid && outputIndex == other.outputIndex && ock == other.ock;
     }
 
-    friend bool operator!=(const PaymentDisclosure& a, const PaymentDisclosure& b) {
-        return !(a == b);
+    bool operator!=(const OrchardOutputDisclosure& other) const {
+        return !(*this == other);
     }
 };
 
+// Forward declaration
+class CWallet;
 
+/**
+ * Generate a Sapling output disclosure key for a given transaction and output index.
+ * This function searches the wallet for an OVK that can decrypt the output and creates
+ * an encoded disclosure that can be shared for proof-of-payment.
+ * 
+ * @param wallet The wallet to search for OVKs
+ * @param txid The transaction ID
+ * @param outputIndex The index of the Sapling output to create a disclosure for
+ * @return The encoded disclosure string, or empty string if no matching OVK found
+ */
+std::string GenerateSaplingDisclosure(CWallet* wallet, const uint256& txid, int outputIndex);
 
-typedef std::pair<PaymentDisclosureKey, PaymentDisclosureInfo> PaymentDisclosureKeyInfo;
+/**
+ * Generate an Orchard action disclosure key for a given transaction and action index.
+ * This function searches the wallet for an OVK that can decrypt the action and creates
+ * an encoded disclosure that can be shared for proof-of-payment.
+ * 
+ * @param wallet The wallet to search for OVKs
+ * @param txid The transaction ID
+ * @param actionIndex The index of the Orchard action to create a disclosure for
+ * @return The encoded disclosure string, or empty string if no matching OVK found
+ */
+std::string GenerateOrchardDisclosure(CWallet* wallet, const uint256& txid, int actionIndex);
 
+/**
+ * Structure representing the result of verifying a Sapling output disclosure
+ */
+struct SaplingDisclosureVerificationResult {
+    bool success;
+    std::string error;
+    uint256 txid;
+    uint32_t outputIndex;
+    uint64_t value;
+    std::string address;
+    std::string memoHex;
+};
+
+/**
+ * Structure representing the result of verifying an Orchard action disclosure
+ */
+struct OrchardDisclosureVerificationResult {
+    bool success;
+    std::string error;
+    uint256 txid;
+    uint32_t actionIndex;
+    uint64_t value;
+    std::string address;
+    std::string memoHex;
+};
+
+/**
+ * Verify and decrypt a Sapling output disclosure.
+ * 
+ * @param disclosureStr The bech32-encoded Sapling disclosure key
+ * @return A result structure containing the decrypted data or error information
+ */
+SaplingDisclosureVerificationResult VerifySaplingDisclosure(const std::string& disclosureStr);
+
+/**
+ * Verify and decrypt an Orchard action disclosure.
+ * 
+ * @param disclosureStr The bech32-encoded Orchard disclosure key
+ * @return A result structure containing the decrypted data or error information
+ */
+OrchardDisclosureVerificationResult VerifyOrchardDisclosure(const std::string& disclosureStr);
+
+/**
+ * Unified structure for disclosure verification results that handles both Sapling and Orchard
+ */
+struct UnifiedDisclosureVerificationResult {
+    bool success;
+    std::string error;
+    std::string disclosureType;  // "Sapling" or "Orchard"
+    uint256 txid;
+    uint32_t outputIndex;  // For both output index (Sapling) and action index (Orchard)
+    uint64_t value;
+    std::string address;
+    std::string memoHex;
+};
+
+/**
+ * Verify and decrypt a payment disclosure of any type (Sapling or Orchard).
+ * Automatically detects the disclosure type by attempting to decode it.
+ * 
+ * @param disclosureStr The bech32-encoded disclosure key (Sapling or Orchard)
+ * @return A unified result structure containing the decrypted data or error information
+ */
+UnifiedDisclosureVerificationResult VerifyPaymentDisclosure(const std::string& disclosureStr);
 
 #endif // ZCASH_PAYMENTDISCLOSURE_H

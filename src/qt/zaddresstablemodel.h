@@ -35,13 +35,15 @@ public:
     enum ColumnIndex {
         isMine = 0,
         Balance = 1,
-        Address = 2,  /**< Komodo z-address */
-        Label = 3,   /**< User specified label */
+        Scope = 2,   /**< Orchard IVK scope (External/Internal) */
+        Address = 3,  /**< Komodo z-address */
+        Label = 4,   /**< User specified label */
 
     };
 
     enum RoleIndex {
-        TypeRole = Qt::UserRole /**< Type of address (#Send or #Receive) */
+        TypeRole = Qt::UserRole,    /**< Type of address (#Send or #Receive) */
+        AddressRole = Qt::UserRole + 1  /**< Raw address string, usable even after column re-ordering */
     };
 
     /** Return status of edit/insert operation */
@@ -67,6 +69,7 @@ public:
     QModelIndex index(int row, int column, const QModelIndex &parent) const;
     bool removeRows(int row, int count, const QModelIndex &parent = QModelIndex());
     Qt::ItemFlags flags(const QModelIndex &index) const;
+    void sort(int column, Qt::SortOrder order = Qt::AscendingOrder);
     /*@}*/
 
     /* Add an address to the model.
